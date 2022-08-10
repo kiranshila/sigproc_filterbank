@@ -1,12 +1,9 @@
 [package]
-name = "sigproc-filterbank"
+name = "sigproc_filterbank"
 version = "0.1.0"
 edition = "2021"
 
-
 [dependencies]
-cargo-expand = "1.0"
-derivative = "2.2.0"
 nom = "7.1"
 thiserror = "1.0"
 

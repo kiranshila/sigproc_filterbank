@@ -1,6 +1,3 @@
-use std::collections::HashSet;
-
-use derivative::Derivative;
 use nom::{
     branch::alt,
     bytes::streaming::tag,
@@ -10,7 +7,7 @@ use nom::{
         streaming::{f64, u32},
         Endianness,
     },
-    sequence::{preceded, terminated},
+    sequence::preceded,
     IResult,
 };
 
@@ -31,56 +28,47 @@ fn header_end(input: &[u8], endian: Endianness) -> ParseResult<&[u8]> {
     header_string("HEADER_END", endian)(input)
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+/// The number of bits to represent the data
+pub enum Bits {
+    /// Data is 2 bits, represented on read in a u8 container
+    _2,
+    /// Data is 4 bits, represented on read in a u8 container
+    _4,
+    /// Data is u8
+    _8,
+    /// Data is u16
+    _16,
+    /// Data is f32
+    _32,
+}
+
 /// Headers as defined by the SIGPROC specification
-#[derive(Derivative)]
-#[derivative(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq)]
 pub enum HeaderParameter<'a> {
-    /// 0=fake data; 1=Arecibo; 2=Ooty... others to be added
     TelescopeID(u32),
-    /// 0=FAKE; 1=PSPM; 2=WAPP; 3=OOTY... others to be added
     MachineID(u32),
-    /// 1=filterbank; 2=time series... others to be added
     DataType(u32),
-    /// The name of the original data file
     RawDataFile(&'a str),
-    /// The name of the source being observed by the telescope
     SourceName(&'a str),
-    /// True is the data is Barycentric
     Barycentric(bool),
-    /// True is the data is Pulsar-centric
     Pulsarcentric(bool),
-    /// Telescope azimuth at start of scan (degrees)
-    AzStart(#[derivative(Hash = "ignore")] f64),
-    /// Telescope zenith angle at start of scan (degrees)
-    ZaStart(#[derivative(Hash = "ignore")] f64),
-    /// Right ascension (J2000) of source (hhmmss.s)
-    SrcRaj(#[derivative(Hash = "ignore")] f64),
-    /// Declination (J2000) of source (ddmmss.s)
-    SrcDej(#[derivative(Hash = "ignore")] f64),
-    /// Timestamp (MJD) of first sample
-    TStart(#[derivative(Hash = "ignore")] f64),
-    /// Time interval between samples (s)
-    TSamp(#[derivative(Hash = "ignore")] f64),
-    /// Number of bits per time sample
-    NBits(u32),
-    /// Number of time samples in the data file
+    AzStart(f64),
+    ZaStart(f64),
+    SrcRaj(f64),
+    SrcDej(f64),
+    TStart(f64),
+    TSamp(f64),
+    NBits(Bits),
     #[deprecated]
     NSamples(u32),
-    /// Center frequency of first channel (MHz)
-    FCh1(#[derivative(Hash = "ignore")] f64),
-    /// Channel bandwidth (MHz)
-    FOff(#[derivative(Hash = "ignore")] f64),
-    /// Number of filterbank channels
+    FCh1(f64),
+    FOff(f64),
     NChans(u32),
-    /// Number of separate IF channels
     NIFs(u32),
-    /// Reference dispersion measure (cm^-3 pc)
-    RefDM(#[derivative(Hash = "ignore")] f64),
-    /// Folding period (s)
-    Period(#[derivative(Hash = "ignore")] f64),
-    /// Numbers of beams
+    RefDM(f64),
+    Period(f64),
     NBeams(u32),
-    /// Current beam number
     IBeam(u32),
 }
 
@@ -119,7 +107,6 @@ macro_rules! string_header {
 numeric_header!(telescope_id, u32, TelescopeID);
 numeric_header!(machine_id, u32, MachineID);
 numeric_header!(data_type, u32, DataType);
-numeric_header!(nbits, u32, NBits);
 numeric_header!(nchans, u32, NChans);
 numeric_header!(nifs, u32, NIFs);
 numeric_header!(nbeams, u32, NBeams);
@@ -139,7 +126,22 @@ boolean_header!(pulsarcentric, Pulsarcentric);
 string_header!(rawdatafile, RawDataFile);
 string_header!(source_name, SourceName);
 
-pub fn header<'a>(input: &'a [u8]) -> ParseResult<'a, HashSet<HeaderParameter<'a>>> {
+fn nbits(input: &[u8], endian: Endianness) -> HeaderResult {
+    let (remaining, value) = preceded(header_string("nbits", endian), u32(endian))(input)?;
+    Ok((
+        remaining,
+        HeaderParameter::NBits(match value {
+            2 => Bits::_2,
+            4 => Bits::_4,
+            8 => Bits::_8,
+            16 => Bits::_16,
+            32 => Bits::_32,
+            _ => return Err(nom::Err::Error(FilterbankError::InvalidHeader)),
+        }),
+    ))
+}
+
+fn header<'a>(input: &'a [u8]) -> ParseResult<'a, (Endianness, Vec<HeaderParameter<'a>>)> {
     // Determine the endianness based on the first match of HEADER_START
     let res_big = header_start(input, Endianness::Big);
     let res_little = header_start(input, Endianness::Little);
@@ -156,6 +158,7 @@ pub fn header<'a>(input: &'a [u8]) -> ParseResult<'a, HashSet<HeaderParameter<'a
             // All the curried header parsers
             // For some reason, nom limits us to 21 branches per alt, so we need to nest
             alt((
+                // u32s
                 |i: &'a [u8]| telescope_id(i, endian),
                 |i: &'a [u8]| machine_id(i, endian),
                 |i: &'a [u8]| data_type(i, endian),
@@ -166,6 +169,7 @@ pub fn header<'a>(input: &'a [u8]) -> ParseResult<'a, HashSet<HeaderParameter<'a
                 |i: &'a [u8]| ibeam(i, endian),
             )),
             alt((
+                // f64s
                 |i: &'a [u8]| az_start(i, endian),
                 |i: &'a [u8]| za_start(i, endian),
                 |i: &'a [u8]| src_raj(i, endian),
@@ -180,13 +184,442 @@ pub fn header<'a>(input: &'a [u8]) -> ParseResult<'a, HashSet<HeaderParameter<'a
                 |i: &'a [u8]| pulsarcentric(i, endian),
             )),
             alt((
+                // Strings
                 |i: &'a [u8]| rawdatafile(i, endian),
                 |i: &'a [u8]| source_name(i, endian),
             )),
         )),
         |i: &'a [u8]| header_end(i, endian),
     )(remaining)?;
-    Ok((remaining, headers.into_iter().collect()))
+    Ok((remaining, (endian, headers)))
+}
+
+#[derive(Debug)]
+/// The container to a SIGPROC filterbank
+///
+/// This type contains the parsed header values and can `get` data at a given sample, channel, and IF index
+pub struct Filterbank<'a> {
+    /// Pointer to the data
+    raw_data: &'a [u8],
+    /// Data (if we're holding it)
+    data: Option<Vec<u8>>,
+    /// Endinanness reported from the header parser or set to native if we hold the data
+    endian: Endianness,
+    telescope_id: Option<u32>,
+    machine_id: Option<u32>,
+    data_type: Option<u32>,
+    raw_data_file: Option<&'a str>,
+    source_name: Option<&'a str>,
+    barycentric: Option<bool>,
+    pulsarcentric: Option<bool>,
+    az_start: Option<f64>,
+    za_start: Option<f64>,
+    src_raj: Option<f64>,
+    src_dej: Option<f64>,
+    tstart: Option<f64>,
+    tsamp: Option<f64>,
+    nbits: Option<Bits>,
+    nsamples: Option<usize>,
+    fch1: Option<f64>,
+    foff: Option<f64>,
+    nchans: Option<usize>,
+    nifs: Option<usize>,
+    ref_dm: Option<f64>,
+    period: Option<f64>,
+    nbeams: Option<usize>,
+    ibeam: Option<usize>,
+}
+
+impl<'a> Filterbank<'a> {
+    // Create an empty filterbank with size set by `nbits`, `nchans`, `nifs`, and `nsamps`
+    pub fn new(nbits: Bits, nchans: usize, nifs: usize, nsamples: usize) -> Self {
+        let bytes_per_samp = match nbits {
+            Bits::_2 => 1,
+            Bits::_4 => 1,
+            Bits::_8 => 1,
+            Bits::_16 => 2,
+            Bits::_32 => 4,
+        };
+        let total_bytes = nsamples * bytes_per_samp * nifs * nchans;
+        let data = vec![0u8; total_bytes];
+        let raw_data = &data;
+
+        Self {
+            raw_data,
+            data: Some(data),
+            endian: Endianness::Native,
+            telescope_id: None,
+            machine_id: None,
+            data_type: None,
+            raw_data_file: None,
+            source_name: None,
+            barycentric: None,
+            pulsarcentric: None,
+            az_start: None,
+            za_start: None,
+            src_raj: None,
+            src_dej: None,
+            tstart: None,
+            tsamp: None,
+            nbits: Some(nbits),
+            nsamples: Some(nsamples),
+            fch1: None,
+            foff: None,
+            nchans: Some(nchans),
+            nifs: Some(nifs),
+            ref_dm: None,
+            period: None,
+            nbeams: None,
+            ibeam: None,
+        }
+    }
+
+    pub fn from_bytes(input: &'a [u8]) -> Result<Filterbank<'a>, FilterbankError> {
+        let (remaining, (endian, hdrs)) = header(input).map_err(|e| match e {
+            nom::Err::Incomplete(_) => FilterbankError::IncompleteHeader,
+            nom::Err::Error(e) => e,
+            nom::Err::Failure(e) => e,
+        })?;
+        let mut s = Self {
+            raw_data: remaining,
+            data: None,
+            endian,
+            telescope_id: None,
+            machine_id: None,
+            data_type: None,
+            raw_data_file: None,
+            source_name: None,
+            barycentric: None,
+            pulsarcentric: None,
+            az_start: None,
+            za_start: None,
+            src_raj: None,
+            src_dej: None,
+            tstart: None,
+            tsamp: None,
+            nbits: None,
+            nsamples: None,
+            fch1: None,
+            foff: None,
+            nchans: None,
+            nifs: None,
+            ref_dm: None,
+            period: None,
+            nbeams: None,
+            ibeam: None,
+        };
+        // Build the fields
+        for header in hdrs {
+            match header {
+                HeaderParameter::TelescopeID(v) => s.telescope_id = Some(v),
+                HeaderParameter::MachineID(v) => s.machine_id = Some(v),
+                HeaderParameter::DataType(v) => s.data_type = Some(v),
+                HeaderParameter::RawDataFile(v) => s.raw_data_file = Some(v),
+                HeaderParameter::SourceName(v) => s.source_name = Some(v),
+                HeaderParameter::Barycentric(v) => s.barycentric = Some(v),
+                HeaderParameter::Pulsarcentric(v) => s.pulsarcentric = Some(v),
+                HeaderParameter::AzStart(v) => s.az_start = Some(v),
+                HeaderParameter::ZaStart(v) => s.za_start = Some(v),
+                HeaderParameter::SrcRaj(v) => s.src_raj = Some(v),
+                HeaderParameter::SrcDej(v) => s.src_dej = Some(v),
+                HeaderParameter::TStart(v) => s.tstart = Some(v),
+                HeaderParameter::TSamp(v) => s.tsamp = Some(v),
+                HeaderParameter::NBits(v) => s.nbits = Some(v),
+                HeaderParameter::FCh1(v) => s.fch1 = Some(v),
+                HeaderParameter::FOff(v) => s.foff = Some(v),
+                HeaderParameter::NChans(v) => s.nchans = Some(v as usize),
+                HeaderParameter::NIFs(v) => s.nifs = Some(v as usize),
+                HeaderParameter::RefDM(v) => s.ref_dm = Some(v),
+                HeaderParameter::Period(v) => s.period = Some(v),
+                HeaderParameter::NBeams(v) => s.nbeams = Some(v as usize),
+                HeaderParameter::IBeam(v) => s.ibeam = Some(v as usize),
+                _ => (),
+            }
+        }
+        // Check the invariants
+        if s.nbits.is_none() || s.nchans.is_none() || s.nifs.is_none() {
+            return Err(FilterbankError::IncompleteHeader);
+        }
+        // Compute nsamp
+        let nbits = match s.nbits.unwrap() {
+            Bits::_2 => 2,
+            Bits::_4 => 4,
+            Bits::_8 => 8,
+            Bits::_16 => 16,
+            Bits::_32 => 32,
+        };
+        let nchans = s.nchans.unwrap();
+        let nifs = s.nifs.unwrap();
+        let nsamp_total = (remaining.len() * 8) / nbits;
+        let nsamp = nsamp_total / nchans / nifs;
+        s.nsamples = Some(nsamp);
+        Ok(s)
+    }
+
+    /// Gets the value from the time-major data
+    pub fn get(&self, i_if: usize, i_chan: usize, i_samp: usize) -> f32 {
+        let nbits = match self.nbits.unwrap() {
+            Bits::_2 => 2,
+            Bits::_4 => 4,
+            Bits::_8 => 8,
+            Bits::_16 => 16,
+            Bits::_32 => 32,
+        };
+        let nifs = self.nifs.unwrap();
+        let nsamp = self.nsamples.unwrap();
+        let nchans = self.nchans.unwrap();
+        // Bounds checks
+        if i_if >= nifs {
+            panic!("IF index out of bounds");
+        }
+        if i_samp >= nsamp {
+            panic!("Sample index out of bounds");
+        }
+        if i_chan >= nchans {
+            panic!("Channel index out of bounds");
+        }
+        // Stride to the right starting bit (MSB0 (hopefully, this isn't speced))
+        let bit_ptr = nbits * (nchans * nsamp * i_if + nsamp * i_chan + i_samp);
+        // Find which byte this is in
+        let byte_ptr = bit_ptr / 8usize;
+
+        if nbits < 8 {
+            // Find the bit offset in this byte
+            let bit_offset = bit_ptr % 8usize;
+            // Mask, cast, and return
+            let shift = 8usize - nbits - bit_offset;
+            ((self.raw_data[byte_ptr] >> shift) & (2u8.pow(nbits as u32) - 1u8)) as f32
+        } else if nbits == 8 {
+            self.raw_data[byte_ptr] as f32
+        } else {
+            // Grab the bytes we need
+            let bytes = &self.raw_data[byte_ptr..byte_ptr + (nbits / 8usize)];
+            // Convert
+            match nbits {
+                16 => match self.endian {
+                    Endianness::Big => u16::from_be_bytes(bytes.try_into().unwrap()) as f32,
+                    Endianness::Little => u16::from_le_bytes(bytes.try_into().unwrap()) as f32,
+                    _ => unreachable!(),
+                },
+                32 => match self.endian {
+                    Endianness::Big => f32::from_be_bytes(bytes.try_into().unwrap()),
+                    Endianness::Little => f32::from_le_bytes(bytes.try_into().unwrap()),
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    /// 0=fake data; 1=Arecibo; 2=Ooty... others to be added
+    pub fn telescope_id(&self) -> Option<u32> {
+        self.telescope_id
+    }
+
+    /// 0=FAKE; 1=PSPM; 2=WAPP; 3=OOTY... others to be added
+    pub fn machine_id(&self) -> Option<u32> {
+        self.machine_id
+    }
+
+    /// 1=filterbank; 2=time series... others to be added
+    pub fn data_type(&self) -> Option<u32> {
+        self.data_type
+    }
+
+    /// The name of the original data file
+    pub fn raw_data_file(&self) -> Option<&str> {
+        self.raw_data_file
+    }
+
+    /// The name of the source being observed by the telescope
+    pub fn source_name(&self) -> Option<&str> {
+        self.source_name
+    }
+
+    /// True is the data is Barycentric
+    pub fn barycentric(&self) -> Option<bool> {
+        self.barycentric
+    }
+
+    /// True is the data is Pulsar-centric
+    pub fn pulsarcentric(&self) -> Option<bool> {
+        self.pulsarcentric
+    }
+
+    /// Telescope azimuth at start of scan (degrees)
+    pub fn az_start(&self) -> Option<f64> {
+        self.az_start
+    }
+
+    /// Telescope zenith angle at start of scan (degrees)
+    pub fn za_start(&self) -> Option<f64> {
+        self.za_start
+    }
+
+    /// Right ascension (J2000) of source (hhmmss.s)
+    pub fn src_raj(&self) -> Option<f64> {
+        self.src_raj
+    }
+
+    /// Declination (J2000) of source (ddmmss.s)
+    pub fn src_dej(&self) -> Option<f64> {
+        self.src_dej
+    }
+
+    /// Timestamp (MJD) of first sample
+    pub fn tstart(&self) -> Option<f64> {
+        self.tstart
+    }
+
+    /// Time interval between samples (s)
+    pub fn tsamp(&self) -> Option<f64> {
+        self.tsamp
+    }
+
+    /// Center frequency of first channel (MHz)
+    pub fn fch1(&self) -> Option<f64> {
+        self.fch1
+    }
+
+    /// Channel bandwidth (MHz)
+    pub fn foff(&self) -> Option<f64> {
+        self.foff
+    }
+
+    /// Number of bits per time sample
+    pub fn nbits(&self) -> Bits {
+        self.nbits.unwrap()
+    }
+
+    /// Number of time samples in the data file
+    pub fn nsamples(&self) -> usize {
+        self.nsamples.unwrap()
+    }
+
+    /// Number of filterbank channels
+    pub fn nchans(&self) -> usize {
+        self.nchans.unwrap()
+    }
+
+    /// Number of separate IF channels
+    pub fn nifs(&self) -> usize {
+        self.nifs.unwrap()
+    }
+
+    /// Reference dispersion measure (cm^-3 pc)
+    pub fn ref_dm(&self) -> Option<f64> {
+        self.ref_dm
+    }
+
+    /// Folding period (s)
+    pub fn period(&self) -> Option<f64> {
+        self.period
+    }
+
+    /// Numbers of beams
+    pub fn nbeams(&self) -> Option<usize> {
+        self.nbeams
+    }
+
+    /// Current beam number
+    pub fn ibeam(&self) -> Option<usize> {
+        self.ibeam
+    }
+
+    /// Sets the telescope id of this [`Filterbank`].
+    pub fn set_telescope_id(&mut self, telescope_id: Option<u32>) {
+        self.telescope_id = telescope_id;
+    }
+
+    /// Sets the machine id of this [`Filterbank`].
+    pub fn set_machine_id(&mut self, machine_id: Option<u32>) {
+        self.machine_id = machine_id;
+    }
+
+    /// Sets the data type of this [`Filterbank`].
+    pub fn set_data_type(&mut self, data_type: Option<u32>) {
+        self.data_type = data_type;
+    }
+
+    /// Sets the raw data file of this [`Filterbank`].
+    pub fn set_raw_data_file(&mut self, raw_data_file: Option<&'a str>) {
+        self.raw_data_file = raw_data_file;
+    }
+
+    /// Sets the source name of this [`Filterbank`].
+    pub fn set_source_name(&mut self, source_name: Option<&'a str>) {
+        self.source_name = source_name;
+    }
+
+    /// Sets the barycentric of this [`Filterbank`].
+    pub fn set_barycentric(&mut self, barycentric: Option<bool>) {
+        self.barycentric = barycentric;
+    }
+
+    /// Sets the pulsarcentric of this [`Filterbank`].
+    pub fn set_pulsarcentric(&mut self, pulsarcentric: Option<bool>) {
+        self.pulsarcentric = pulsarcentric;
+    }
+
+    /// Sets the az start of this [`Filterbank`].
+    pub fn set_az_start(&mut self, az_start: Option<f64>) {
+        self.az_start = az_start;
+    }
+
+    /// Sets the za start of this [`Filterbank`].
+    pub fn set_za_start(&mut self, za_start: Option<f64>) {
+        self.za_start = za_start;
+    }
+
+    /// Sets the src raj of this [`Filterbank`].
+    pub fn set_src_raj(&mut self, src_raj: Option<f64>) {
+        self.src_raj = src_raj;
+    }
+
+    /// Sets the src dej of this [`Filterbank`].
+    pub fn set_src_dej(&mut self, src_dej: Option<f64>) {
+        self.src_dej = src_dej;
+    }
+
+    /// Sets the tstart of this [`Filterbank`].
+    pub fn set_tstart(&mut self, tstart: Option<f64>) {
+        self.tstart = tstart;
+    }
+
+    /// Sets the tsamp of this [`Filterbank`].
+    pub fn set_tsamp(&mut self, tsamp: Option<f64>) {
+        self.tsamp = tsamp;
+    }
+
+    /// Sets the fch1 of this [`Filterbank`].
+    pub fn set_fch1(&mut self, fch1: Option<f64>) {
+        self.fch1 = fch1;
+    }
+
+    /// Sets the foff of this [`Filterbank`].
+    pub fn set_foff(&mut self, foff: Option<f64>) {
+        self.foff = foff;
+    }
+
+    /// Sets the ref dm of this [`Filterbank`].
+    pub fn set_ref_dm(&mut self, ref_dm: Option<f64>) {
+        self.ref_dm = ref_dm;
+    }
+
+    /// Sets the period of this [`Filterbank`].
+    pub fn set_period(&mut self, period: Option<f64>) {
+        self.period = period;
+    }
+
+    /// Sets the nbeams of this [`Filterbank`].
+    pub fn set_nbeams(&mut self, nbeams: Option<usize>) {
+        self.nbeams = nbeams;
+    }
+
+    /// Sets the ibeam of this [`Filterbank`].
+    pub fn set_ibeam(&mut self, ibeam: Option<usize>) {
+        self.ibeam = ibeam;
+    }
 }
 
 #[cfg(test)]
@@ -243,7 +676,7 @@ mod tests {
     fn test_header() {
         let mut hdr = sigproc_string("HEADER_START");
         let mut nb = sigproc_string("nbits");
-        nb.extend_from_slice(&4u32.to_ne_bytes());
+        nb.extend_from_slice(&8u32.to_ne_bytes());
         let mut azstart = sigproc_string("az_start");
         azstart.extend_from_slice(&867.5309f64.to_ne_bytes());
         let mut zastart = sigproc_string("za_start");
@@ -253,16 +686,13 @@ mod tests {
         hdr.extend_from_slice(&azstart);
         hdr.extend_from_slice(&zastart);
         hdr.extend_from_slice(&end);
-        let (_, res) = header(&hdr).unwrap();
+        let (_, (_, res)) = header(&hdr).unwrap();
         assert_eq!(
-            HashSet::from_iter(
-                vec![
-                    HeaderParameter::AzStart(867.5309),
-                    HeaderParameter::ZaStart(420.69),
-                    HeaderParameter::NBits(4)
-                ]
-                .into_iter()
-            ),
+            vec![
+                HeaderParameter::NBits(Bits::_8),
+                HeaderParameter::AzStart(867.5309),
+                HeaderParameter::ZaStart(420.69),
+            ],
             res
         );
     }
@@ -271,30 +701,222 @@ mod tests {
     fn test_header_from_fil() {
         let file = File::open("tests/header.fil").unwrap();
         let bytes = unsafe { Mmap::map(&file).unwrap() };
-        let (_, res) = header(&bytes[..]).unwrap();
+        let (_, (_, res)) = header(&bytes[..]).unwrap();
         assert_eq!(
-            HashSet::from_iter(
-                vec![
-                    HeaderParameter::DataType(1),
-                    HeaderParameter::IBeam(1),
-                    HeaderParameter::FOff(3.814697265625e-6),
-                    HeaderParameter::Pulsarcentric(false),
-                    HeaderParameter::TelescopeID(4),
-                    HeaderParameter::TStart(58625.737858796296,),
-                    HeaderParameter::NBits(32),
-                    HeaderParameter::SourceName("J2048-1616"),
-                    HeaderParameter::Barycentric(false),
-                    HeaderParameter::NBeams(1),
-                    HeaderParameter::NChans(33554432),
-                    HeaderParameter::TSamp(16.777216),
-                    HeaderParameter::FCh1(704.0),
-                    HeaderParameter::SrcDej(-158355.5),
-                    HeaderParameter::SrcRaj(204835.6),
-                    HeaderParameter::NIFs(1),
-                ]
-                .into_iter()
-            ),
+            vec![
+                HeaderParameter::TelescopeID(4),
+                HeaderParameter::NBits(Bits::_32),
+                HeaderParameter::SourceName("J2048-1616"),
+                HeaderParameter::DataType(1),
+                HeaderParameter::NChans(33554432),
+                HeaderParameter::IBeam(1),
+                HeaderParameter::Barycentric(false),
+                HeaderParameter::Pulsarcentric(false),
+                HeaderParameter::TSamp(16.777216),
+                HeaderParameter::FOff(3.814697265625e-6),
+                HeaderParameter::SrcRaj(204835.6),
+                HeaderParameter::SrcDej(-158355.5),
+                HeaderParameter::TStart(58625.737858796296,),
+                HeaderParameter::NBeams(1),
+                HeaderParameter::FCh1(704.0),
+                HeaderParameter::NIFs(1),
+            ],
             res
         );
+    }
+
+    #[test]
+    fn test_2_bit_data() {
+        // Build header
+        let mut bytes = sigproc_string("HEADER_START");
+        let mut nb = sigproc_string("nbits");
+        nb.extend_from_slice(&2u32.to_ne_bytes());
+        let mut nc = sigproc_string("nchans");
+        nc.extend_from_slice(&2u32.to_ne_bytes());
+        let mut ni = sigproc_string("nifs");
+        ni.extend_from_slice(&2u32.to_ne_bytes());
+        let end = sigproc_string("HEADER_END");
+        bytes.extend_from_slice(&nb);
+        bytes.extend_from_slice(&nc);
+        bytes.extend_from_slice(&ni);
+        bytes.extend_from_slice(&end);
+        // Build data (2 samples total over 2 channels over 2 if)
+        let data: [u8; 2] = [0b00_01_10_11, 0b11_10_01_00];
+        bytes.extend_from_slice(&data);
+        // Parse and build
+        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        assert_eq!(fb.get(0, 0, 0), 0f32);
+        assert_eq!(fb.get(0, 0, 1), 1f32);
+
+        assert_eq!(fb.get(0, 1, 0), 2f32);
+        assert_eq!(fb.get(0, 1, 1), 3f32);
+
+        assert_eq!(fb.get(1, 0, 0), 3f32);
+        assert_eq!(fb.get(1, 0, 1), 2f32);
+
+        assert_eq!(fb.get(1, 1, 0), 1f32);
+        assert_eq!(fb.get(1, 1, 1), 0f32);
+    }
+
+    #[test]
+    fn test_4_bit_data() {
+        // Build header
+        let mut bytes = sigproc_string("HEADER_START");
+        let mut nb = sigproc_string("nbits");
+        nb.extend_from_slice(&4u32.to_ne_bytes());
+        let mut nc = sigproc_string("nchans");
+        nc.extend_from_slice(&2u32.to_ne_bytes());
+        let mut ni = sigproc_string("nifs");
+        ni.extend_from_slice(&2u32.to_ne_bytes());
+        let end = sigproc_string("HEADER_END");
+        bytes.extend_from_slice(&nb);
+        bytes.extend_from_slice(&nc);
+        bytes.extend_from_slice(&ni);
+        bytes.extend_from_slice(&end);
+        // Build data (2 samples total over 2 channels over 2 if)
+        let data: [u8; 4] = [0b0000_0001, 0b0010_0011, 0b0100_0101, 0b0110_0111];
+        bytes.extend_from_slice(&data);
+        // Parse and build
+        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        assert_eq!(fb.get(0, 0, 0), 0f32);
+        assert_eq!(fb.get(0, 0, 1), 1f32);
+
+        assert_eq!(fb.get(0, 1, 0), 2f32);
+        assert_eq!(fb.get(0, 1, 1), 3f32);
+
+        assert_eq!(fb.get(1, 0, 0), 4f32);
+        assert_eq!(fb.get(1, 0, 1), 5f32);
+
+        assert_eq!(fb.get(1, 1, 0), 6f32);
+        assert_eq!(fb.get(1, 1, 1), 7f32);
+    }
+
+    #[test]
+    fn test_8_bit_data() {
+        // Build header
+        let mut bytes = sigproc_string("HEADER_START");
+        let mut nb = sigproc_string("nbits");
+        nb.extend_from_slice(&8u32.to_ne_bytes());
+        let mut nc = sigproc_string("nchans");
+        nc.extend_from_slice(&2u32.to_ne_bytes());
+        let mut ni = sigproc_string("nifs");
+        ni.extend_from_slice(&2u32.to_ne_bytes());
+        let end = sigproc_string("HEADER_END");
+        bytes.extend_from_slice(&nb);
+        bytes.extend_from_slice(&nc);
+        bytes.extend_from_slice(&ni);
+        bytes.extend_from_slice(&end);
+        // Build data (2 samples total over 2 channels over 2 if)
+        let data: [u8; 8] = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        bytes.extend_from_slice(&data);
+        // Parse and build
+        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        assert_eq!(fb.get(0, 0, 0), 0f32);
+        assert_eq!(fb.get(0, 0, 1), 1f32);
+
+        assert_eq!(fb.get(0, 1, 0), 2f32);
+        assert_eq!(fb.get(0, 1, 1), 3f32);
+
+        assert_eq!(fb.get(1, 0, 0), 4f32);
+        assert_eq!(fb.get(1, 0, 1), 5f32);
+
+        assert_eq!(fb.get(1, 1, 0), 6f32);
+        assert_eq!(fb.get(1, 1, 1), 7f32);
+    }
+
+    #[test]
+    fn test_16_bit_data() {
+        // Build header
+        let mut bytes = sigproc_string("HEADER_START");
+        let mut nb = sigproc_string("nbits");
+        nb.extend_from_slice(&16u32.to_ne_bytes());
+        let mut nc = sigproc_string("nchans");
+        nc.extend_from_slice(&2u32.to_ne_bytes());
+        let mut ni = sigproc_string("nifs");
+        ni.extend_from_slice(&2u32.to_ne_bytes());
+        let end = sigproc_string("HEADER_END");
+        bytes.extend_from_slice(&nb);
+        bytes.extend_from_slice(&nc);
+        bytes.extend_from_slice(&ni);
+        bytes.extend_from_slice(&end);
+        // Build data (2 samples total over 2 channels over 2 if)
+        bytes.extend_from_slice(&0u16.to_ne_bytes());
+        bytes.extend_from_slice(&1u16.to_ne_bytes());
+        bytes.extend_from_slice(&2u16.to_ne_bytes());
+        bytes.extend_from_slice(&3u16.to_ne_bytes());
+        bytes.extend_from_slice(&4u16.to_ne_bytes());
+        bytes.extend_from_slice(&5u16.to_ne_bytes());
+        bytes.extend_from_slice(&6u16.to_ne_bytes());
+        bytes.extend_from_slice(&7u16.to_ne_bytes());
+        // Parse and build
+        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        assert_eq!(fb.get(0, 0, 0), 0f32);
+        assert_eq!(fb.get(0, 0, 1), 1f32);
+
+        assert_eq!(fb.get(0, 1, 0), 2f32);
+        assert_eq!(fb.get(0, 1, 1), 3f32);
+
+        assert_eq!(fb.get(1, 0, 0), 4f32);
+        assert_eq!(fb.get(1, 0, 1), 5f32);
+
+        assert_eq!(fb.get(1, 1, 0), 6f32);
+        assert_eq!(fb.get(1, 1, 1), 7f32);
+    }
+
+    #[test]
+    fn test_32_bit_data() {
+        // Build header
+        let mut bytes = sigproc_string("HEADER_START");
+        let mut nb = sigproc_string("nbits");
+        nb.extend_from_slice(&32u32.to_ne_bytes());
+        let mut nc = sigproc_string("nchans");
+        nc.extend_from_slice(&2u32.to_ne_bytes());
+        let mut ni = sigproc_string("nifs");
+        ni.extend_from_slice(&2u32.to_ne_bytes());
+        let end = sigproc_string("HEADER_END");
+        bytes.extend_from_slice(&nb);
+        bytes.extend_from_slice(&nc);
+        bytes.extend_from_slice(&ni);
+        bytes.extend_from_slice(&end);
+        // Build data (2 samples total over 2 channels over 2 if)
+        bytes.extend_from_slice(&0.0f32.to_ne_bytes());
+        bytes.extend_from_slice(&0.1f32.to_ne_bytes());
+        bytes.extend_from_slice(&0.2f32.to_ne_bytes());
+        bytes.extend_from_slice(&0.3f32.to_ne_bytes());
+        bytes.extend_from_slice(&0.4f32.to_ne_bytes());
+        bytes.extend_from_slice(&0.5f32.to_ne_bytes());
+        bytes.extend_from_slice(&0.6f32.to_ne_bytes());
+        bytes.extend_from_slice(&0.7f32.to_ne_bytes());
+        // Parse and build
+        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        assert_eq!(fb.get(0, 0, 0), 0.0f32);
+        assert_eq!(fb.get(0, 0, 1), 0.1f32);
+
+        assert_eq!(fb.get(0, 1, 0), 0.2f32);
+        assert_eq!(fb.get(0, 1, 1), 0.3f32);
+
+        assert_eq!(fb.get(1, 0, 0), 0.4f32);
+        assert_eq!(fb.get(1, 0, 1), 0.5f32);
+
+        assert_eq!(fb.get(1, 1, 0), 0.6f32);
+        assert_eq!(fb.get(1, 1, 1), 0.7f32);
+    }
+
+    #[test]
+    fn test_freq_avg_from_fb() {
+        // nsamp - 10, nbits - 8 , nifs - 1, nchans = 336,
+        let file = File::open("tests/small.fil").unwrap();
+        let bytes = unsafe { Mmap::map(&file).unwrap() };
+        let fb = Filterbank::from_bytes(&bytes[..]).unwrap();
+        let mut tm = [0f32; 10];
+        (0..tm.len()).for_each(|j| {
+            for i in 0..336 {
+                tm[j] += fb.get(0, i, j) / 10f32;
+            }
+        });
+        assert_eq!(tm, [
+            4320.0005, 4321.2007, 4311.201, 4321.1006, 4375.0996, 4286.8994, 4285.102, 4318.8027,
+            4316.8994, 4329.8013,
+        ]);
     }
 }

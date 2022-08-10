@@ -5,6 +5,8 @@ use thiserror::Error;
 pub enum FilterbankError {
     #[error("Invalid header")]
     InvalidHeader,
+    #[error("Incomplete header")]
+    IncompleteHeader,
     #[error("Extenal parser error")]
     ExternalParseError(String),
     #[error("Unknown parser error")]
