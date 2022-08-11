@@ -232,8 +232,8 @@ fn header<'a>(input: &'a [u8]) -> ParseResult<'a, (Endianness, Vec<HeaderParamet
 ///
 /// This type contains the parsed header values and can `get` data at a given sample, channel, and IF index
 pub struct ReadFilterbank<'a> {
-    // Pointer to the data
-    raw_data: &'a [u8],
+    /// Pointer to the data section of the filterbank
+    pub raw_data: &'a [u8],
     // Endinanness reported from the header parser or set to native if we hold the data
     endian: Endianness,
     telescope_id: Option<u32>,
