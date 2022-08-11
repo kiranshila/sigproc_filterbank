@@ -62,8 +62,6 @@ fb.push(&[3u8, 4u8]);
 let bytes = fb.bytes();
 ```
 
-`
-
 ### License
 
 `sigproc_filterbank` is distributed under the terms of both the MIT license and the Apache License (Version 2.0).

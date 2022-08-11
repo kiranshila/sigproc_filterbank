@@ -76,7 +76,7 @@ impl Bits {
 
 /// Headers as defined by the SIGPROC specification
 #[derive(Debug, PartialEq)]
-pub enum HeaderParameter<'a> {
+enum HeaderParameter<'a> {
     TelescopeID(u32),
     MachineID(u32),
     DataType(u32),
@@ -91,7 +91,6 @@ pub enum HeaderParameter<'a> {
     TStart(f64),
     TSamp(f64),
     NBits(Bits),
-    #[deprecated]
     NSamples(u32),
     FCh1(f64),
     FOff(f64),
@@ -141,6 +140,7 @@ numeric_header!(data_type, u32, DataType);
 numeric_header!(nchans, u32, NChans);
 numeric_header!(nifs, u32, NIFs);
 numeric_header!(nbeams, u32, NBeams);
+numeric_header!(nsamples, u32, NSamples);
 numeric_header!(ibeam, u32, IBeam);
 numeric_header!(az_start, f64, AzStart);
 numeric_header!(za_start, f64, ZaStart);
@@ -198,6 +198,7 @@ fn header<'a>(input: &'a [u8]) -> ParseResult<'a, (Endianness, Vec<HeaderParamet
                 |i: &'a [u8]| nchans(i, endian),
                 |i: &'a [u8]| nifs(i, endian),
                 |i: &'a [u8]| nbeams(i, endian),
+                |i: &'a [u8]| nsamples(i, endian),
                 |i: &'a [u8]| ibeam(i, endian),
             )),
             alt((
