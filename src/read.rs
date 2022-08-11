@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use nom::{
     branch::alt,
     bytes::streaming::tag,
@@ -31,17 +33,17 @@ fn header_end(input: &[u8], endian: Endianness) -> ParseResult<&[u8]> {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 /// The number of bits to represent the data
 pub enum Bits {
-    /// Data is 1 bit
+    /// 1 bit data (u1)
     _1,
-    /// Data is 2 bits
+    /// 2 bit data (u2)
     _2,
-    /// Data is 4 bit
+    /// 4 bit data (u4)
     _4,
-    /// Data is u8
+    /// 8 bit data (u8)
     _8,
-    /// Data is u16
+    /// 16 bit data (u16)
     _16,
-    /// Data is f32
+    /// 32 bit data (f32)
     _32,
 }
 
@@ -229,9 +231,9 @@ fn header<'a>(input: &'a [u8]) -> ParseResult<'a, (Endianness, Vec<HeaderParamet
 ///
 /// This type contains the parsed header values and can `get` data at a given sample, channel, and IF index
 pub struct ReadFilterbank<'a> {
-    /// Pointer to the data
+    // Pointer to the data
     raw_data: &'a [u8],
-    /// Endinanness reported from the header parser or set to native if we hold the data
+    // Endinanness reported from the header parser or set to native if we hold the data
     endian: Endianness,
     telescope_id: Option<u32>,
     machine_id: Option<u32>,
@@ -357,30 +359,32 @@ impl<'a> ReadFilterbank<'a> {
         // Find which byte this is in
         let byte_ptr = bit_ptr / 8usize;
 
-        if nbits < 8 {
-            // Find the bit offset in this byte
-            let bit_offset = bit_ptr % 8usize;
-            // Mask, cast, and return
-            let shift = 8usize - nbits - bit_offset;
-            ((self.raw_data[byte_ptr] >> shift) & (2u8.pow(nbits as u32) - 1u8)) as f32
-        } else if nbits == 8 {
-            self.raw_data[byte_ptr] as f32
-        } else {
-            // Grab the bytes we need
-            let bytes = &self.raw_data[byte_ptr..byte_ptr + (nbits / 8usize)];
-            // Convert
-            match nbits {
-                16 => match self.endian {
-                    Endianness::Big => u16::from_be_bytes(bytes.try_into().unwrap()) as f32,
-                    Endianness::Little => u16::from_le_bytes(bytes.try_into().unwrap()) as f32,
+        match nbits.cmp(&8) {
+            Ordering::Less => {
+                // Find the bit offset in this byte
+                let bit_offset = bit_ptr % 8usize;
+                // Mask, cast, and return
+                let shift = 8usize - nbits - bit_offset;
+                ((self.raw_data[byte_ptr] >> shift) & (2u8.pow(nbits as u32) - 1u8)) as f32
+            }
+            Ordering::Equal => self.raw_data[byte_ptr] as f32,
+            Ordering::Greater => {
+                // Grab the bytes we need
+                let bytes = &self.raw_data[byte_ptr..byte_ptr + (nbits / 8usize)];
+                // Convert
+                match nbits {
+                    16 => match self.endian {
+                        Endianness::Big => u16::from_be_bytes(bytes.try_into().unwrap()) as f32,
+                        Endianness::Little => u16::from_le_bytes(bytes.try_into().unwrap()) as f32,
+                        _ => unreachable!(),
+                    },
+                    32 => match self.endian {
+                        Endianness::Big => f32::from_be_bytes(bytes.try_into().unwrap()),
+                        Endianness::Little => f32::from_le_bytes(bytes.try_into().unwrap()),
+                        _ => unreachable!(),
+                    },
                     _ => unreachable!(),
-                },
-                32 => match self.endian {
-                    Endianness::Big => f32::from_be_bytes(bytes.try_into().unwrap()),
-                    Endianness::Little => f32::from_le_bytes(bytes.try_into().unwrap()),
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
+                }
             }
         }
     }
@@ -503,9 +507,7 @@ impl<'a> ReadFilterbank<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-
-    use memmap2::Mmap;
+    use std::{fs::File, io::Read};
 
     use super::*;
     use crate::write::sigproc_string;
@@ -578,8 +580,9 @@ mod tests {
 
     #[test]
     fn test_header_from_fil() {
-        let file = File::open("tests/header.fil").unwrap();
-        let bytes = unsafe { Mmap::map(&file).unwrap() };
+        let mut file = File::open("tests/header.fil").unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
         let (_, (_, res)) = header(&bytes[..]).unwrap();
         assert_eq!(
             vec![
@@ -817,8 +820,9 @@ mod tests {
     #[test]
     fn test_freq_avg_from_fb() {
         // nsamp - 10, nbits - 8 , nifs - 1, nchans = 336,
-        let file = File::open("tests/small.fil").unwrap();
-        let bytes = unsafe { Mmap::map(&file).unwrap() };
+        let mut file = File::open("tests/small.fil").unwrap();
+        let mut bytes = vec![];
+        file.read_to_end(&mut bytes).unwrap();
         let fb = ReadFilterbank::from_bytes(&bytes[..]).unwrap();
         let mut tm = vec![0f32; fb.nsamples()];
         (0..tm.len()).for_each(|j| {
