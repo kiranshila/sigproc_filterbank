@@ -31,9 +31,11 @@ fn header_end(input: &[u8], endian: Endianness) -> ParseResult<&[u8]> {
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 /// The number of bits to represent the data
 pub enum Bits {
-    /// Data is 2 bits, represented on read in a u8 container
+    /// Data is 1 bit
+    _1,
+    /// Data is 2 bits
     _2,
-    /// Data is 4 bits, represented on read in a u8 container
+    /// Data is 4 bit
     _4,
     /// Data is u8
     _8,
@@ -41,6 +43,33 @@ pub enum Bits {
     _16,
     /// Data is f32
     _32,
+}
+
+impl Bits {
+    /// Number of bits each bitsize is
+    pub fn bits(&self) -> usize {
+        match self {
+            Bits::_1 => 1,
+            Bits::_2 => 2,
+            Bits::_4 => 4,
+            Bits::_8 => 8,
+            Bits::_16 => 16,
+            Bits::_32 => 32,
+        }
+    }
+
+    /// Construct a [`Bits`] variant from a usize
+    pub fn from_bits(bits: usize) -> Self {
+        match bits {
+            1 => Bits::_1,
+            2 => Bits::_2,
+            4 => Bits::_4,
+            8 => Bits::_8,
+            16 => Bits::_16,
+            32 => Bits::_32,
+            _ => panic!("Bad number of bits"),
+        }
+    }
 }
 
 /// Headers as defined by the SIGPROC specification
@@ -131,6 +160,7 @@ fn nbits(input: &[u8], endian: Endianness) -> HeaderResult {
     Ok((
         remaining,
         HeaderParameter::NBits(match value {
+            1 => Bits::_1,
             2 => Bits::_2,
             4 => Bits::_4,
             8 => Bits::_8,
@@ -195,14 +225,12 @@ fn header<'a>(input: &'a [u8]) -> ParseResult<'a, (Endianness, Vec<HeaderParamet
 }
 
 #[derive(Debug)]
-/// The container to a SIGPROC filterbank
+/// An immutable container for a SIGPROC filterbank file
 ///
 /// This type contains the parsed header values and can `get` data at a given sample, channel, and IF index
-pub struct Filterbank<'a> {
+pub struct ReadFilterbank<'a> {
     /// Pointer to the data
     raw_data: &'a [u8],
-    /// Data (if we're holding it)
-    data: Option<Vec<u8>>,
     /// Endinanness reported from the header parser or set to native if we hold the data
     endian: Endianness,
     telescope_id: Option<u32>,
@@ -230,51 +258,8 @@ pub struct Filterbank<'a> {
     ibeam: Option<usize>,
 }
 
-impl<'a> Filterbank<'a> {
-    // Create an empty filterbank with size set by `nbits`, `nchans`, `nifs`, and `nsamps`
-    pub fn new(nbits: Bits, nchans: usize, nifs: usize, nsamples: usize) -> Self {
-        let bytes_per_samp = match nbits {
-            Bits::_2 => 1,
-            Bits::_4 => 1,
-            Bits::_8 => 1,
-            Bits::_16 => 2,
-            Bits::_32 => 4,
-        };
-        let total_bytes = nsamples * bytes_per_samp * nifs * nchans;
-        let data = vec![0u8; total_bytes];
-        let raw_data = &data;
-
-        Self {
-            raw_data,
-            data: Some(data),
-            endian: Endianness::Native,
-            telescope_id: None,
-            machine_id: None,
-            data_type: None,
-            raw_data_file: None,
-            source_name: None,
-            barycentric: None,
-            pulsarcentric: None,
-            az_start: None,
-            za_start: None,
-            src_raj: None,
-            src_dej: None,
-            tstart: None,
-            tsamp: None,
-            nbits: Some(nbits),
-            nsamples: Some(nsamples),
-            fch1: None,
-            foff: None,
-            nchans: Some(nchans),
-            nifs: Some(nifs),
-            ref_dm: None,
-            period: None,
-            nbeams: None,
-            ibeam: None,
-        }
-    }
-
-    pub fn from_bytes(input: &'a [u8]) -> Result<Filterbank<'a>, FilterbankError> {
+impl<'a> ReadFilterbank<'a> {
+    pub fn from_bytes(input: &'a [u8]) -> Result<Self, FilterbankError> {
         let (remaining, (endian, hdrs)) = header(input).map_err(|e| match e {
             nom::Err::Incomplete(_) => FilterbankError::IncompleteHeader,
             nom::Err::Error(e) => e,
@@ -282,7 +267,6 @@ impl<'a> Filterbank<'a> {
         })?;
         let mut s = Self {
             raw_data: remaining,
-            data: None,
             endian,
             telescope_id: None,
             machine_id: None,
@@ -341,13 +325,7 @@ impl<'a> Filterbank<'a> {
             return Err(FilterbankError::IncompleteHeader);
         }
         // Compute nsamp
-        let nbits = match s.nbits.unwrap() {
-            Bits::_2 => 2,
-            Bits::_4 => 4,
-            Bits::_8 => 8,
-            Bits::_16 => 16,
-            Bits::_32 => 32,
-        };
+        let nbits = s.nbits.unwrap().bits();
         let nchans = s.nchans.unwrap();
         let nifs = s.nifs.unwrap();
         let nsamp_total = (remaining.len() * 8) / nbits;
@@ -356,15 +334,11 @@ impl<'a> Filterbank<'a> {
         Ok(s)
     }
 
-    /// Gets the value from the time-major data
-    pub fn get(&self, i_if: usize, i_chan: usize, i_samp: usize) -> f32 {
-        let nbits = match self.nbits.unwrap() {
-            Bits::_2 => 2,
-            Bits::_4 => 4,
-            Bits::_8 => 8,
-            Bits::_16 => 16,
-            Bits::_32 => 32,
-        };
+    /// Gets the value from the frequency-major data.
+    ///
+    /// That is, subsequent samples in frequency are contiguous in memory, arranged in blocks of time, and then in IF
+    pub fn get(&self, i_if: usize, i_samp: usize, i_chan: usize) -> f32 {
+        let nbits = self.nbits.unwrap().bits();
         let nifs = self.nifs.unwrap();
         let nsamp = self.nsamples.unwrap();
         let nchans = self.nchans.unwrap();
@@ -379,7 +353,7 @@ impl<'a> Filterbank<'a> {
             panic!("Channel index out of bounds");
         }
         // Stride to the right starting bit (MSB0 (hopefully, this isn't speced))
-        let bit_ptr = nbits * (nchans * nsamp * i_if + nsamp * i_chan + i_samp);
+        let bit_ptr = nbits * (nchans * nsamp * i_if + nchans * i_samp + i_chan);
         // Find which byte this is in
         let byte_ptr = bit_ptr / 8usize;
 
@@ -525,101 +499,6 @@ impl<'a> Filterbank<'a> {
     pub fn ibeam(&self) -> Option<usize> {
         self.ibeam
     }
-
-    /// Sets the telescope id of this [`Filterbank`].
-    pub fn set_telescope_id(&mut self, telescope_id: Option<u32>) {
-        self.telescope_id = telescope_id;
-    }
-
-    /// Sets the machine id of this [`Filterbank`].
-    pub fn set_machine_id(&mut self, machine_id: Option<u32>) {
-        self.machine_id = machine_id;
-    }
-
-    /// Sets the data type of this [`Filterbank`].
-    pub fn set_data_type(&mut self, data_type: Option<u32>) {
-        self.data_type = data_type;
-    }
-
-    /// Sets the raw data file of this [`Filterbank`].
-    pub fn set_raw_data_file(&mut self, raw_data_file: Option<&'a str>) {
-        self.raw_data_file = raw_data_file;
-    }
-
-    /// Sets the source name of this [`Filterbank`].
-    pub fn set_source_name(&mut self, source_name: Option<&'a str>) {
-        self.source_name = source_name;
-    }
-
-    /// Sets the barycentric of this [`Filterbank`].
-    pub fn set_barycentric(&mut self, barycentric: Option<bool>) {
-        self.barycentric = barycentric;
-    }
-
-    /// Sets the pulsarcentric of this [`Filterbank`].
-    pub fn set_pulsarcentric(&mut self, pulsarcentric: Option<bool>) {
-        self.pulsarcentric = pulsarcentric;
-    }
-
-    /// Sets the az start of this [`Filterbank`].
-    pub fn set_az_start(&mut self, az_start: Option<f64>) {
-        self.az_start = az_start;
-    }
-
-    /// Sets the za start of this [`Filterbank`].
-    pub fn set_za_start(&mut self, za_start: Option<f64>) {
-        self.za_start = za_start;
-    }
-
-    /// Sets the src raj of this [`Filterbank`].
-    pub fn set_src_raj(&mut self, src_raj: Option<f64>) {
-        self.src_raj = src_raj;
-    }
-
-    /// Sets the src dej of this [`Filterbank`].
-    pub fn set_src_dej(&mut self, src_dej: Option<f64>) {
-        self.src_dej = src_dej;
-    }
-
-    /// Sets the tstart of this [`Filterbank`].
-    pub fn set_tstart(&mut self, tstart: Option<f64>) {
-        self.tstart = tstart;
-    }
-
-    /// Sets the tsamp of this [`Filterbank`].
-    pub fn set_tsamp(&mut self, tsamp: Option<f64>) {
-        self.tsamp = tsamp;
-    }
-
-    /// Sets the fch1 of this [`Filterbank`].
-    pub fn set_fch1(&mut self, fch1: Option<f64>) {
-        self.fch1 = fch1;
-    }
-
-    /// Sets the foff of this [`Filterbank`].
-    pub fn set_foff(&mut self, foff: Option<f64>) {
-        self.foff = foff;
-    }
-
-    /// Sets the ref dm of this [`Filterbank`].
-    pub fn set_ref_dm(&mut self, ref_dm: Option<f64>) {
-        self.ref_dm = ref_dm;
-    }
-
-    /// Sets the period of this [`Filterbank`].
-    pub fn set_period(&mut self, period: Option<f64>) {
-        self.period = period;
-    }
-
-    /// Sets the nbeams of this [`Filterbank`].
-    pub fn set_nbeams(&mut self, nbeams: Option<usize>) {
-        self.nbeams = nbeams;
-    }
-
-    /// Sets the ibeam of this [`Filterbank`].
-    pub fn set_ibeam(&mut self, ibeam: Option<usize>) {
-        self.ibeam = ibeam;
-    }
 }
 
 #[cfg(test)]
@@ -629,7 +508,7 @@ mod tests {
     use memmap2::Mmap;
 
     use super::*;
-    use crate::serialization::sigproc_string;
+    use crate::write::sigproc_string;
 
     #[test]
     fn test_start_end() {
@@ -726,6 +605,39 @@ mod tests {
     }
 
     #[test]
+    fn test_1_bit_data() {
+        // Build header
+        let mut bytes = sigproc_string("HEADER_START");
+        let mut nb = sigproc_string("nbits");
+        nb.extend_from_slice(&1u32.to_ne_bytes());
+        let mut nc = sigproc_string("nchans");
+        nc.extend_from_slice(&2u32.to_ne_bytes());
+        let mut ni = sigproc_string("nifs");
+        ni.extend_from_slice(&2u32.to_ne_bytes());
+        let end = sigproc_string("HEADER_END");
+        bytes.extend_from_slice(&nb);
+        bytes.extend_from_slice(&nc);
+        bytes.extend_from_slice(&ni);
+        bytes.extend_from_slice(&end);
+        // Build data (2 samples total over 2 channels over 2 if)
+        let data: [u8; 1] = [0b0001_1011];
+        bytes.extend_from_slice(&data);
+        // Parse and build
+        let fb = ReadFilterbank::from_bytes(&bytes).unwrap();
+        assert_eq!(fb.get(0, 0, 0), 0f32);
+        assert_eq!(fb.get(0, 0, 1), 0f32);
+
+        assert_eq!(fb.get(0, 1, 0), 0f32);
+        assert_eq!(fb.get(0, 1, 1), 1f32);
+
+        assert_eq!(fb.get(1, 0, 0), 1f32);
+        assert_eq!(fb.get(1, 0, 1), 0f32);
+
+        assert_eq!(fb.get(1, 1, 0), 1f32);
+        assert_eq!(fb.get(1, 1, 1), 1f32);
+    }
+
+    #[test]
     fn test_2_bit_data() {
         // Build header
         let mut bytes = sigproc_string("HEADER_START");
@@ -744,7 +656,7 @@ mod tests {
         let data: [u8; 2] = [0b00_01_10_11, 0b11_10_01_00];
         bytes.extend_from_slice(&data);
         // Parse and build
-        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        let fb = ReadFilterbank::from_bytes(&bytes).unwrap();
         assert_eq!(fb.get(0, 0, 0), 0f32);
         assert_eq!(fb.get(0, 0, 1), 1f32);
 
@@ -777,7 +689,7 @@ mod tests {
         let data: [u8; 4] = [0b0000_0001, 0b0010_0011, 0b0100_0101, 0b0110_0111];
         bytes.extend_from_slice(&data);
         // Parse and build
-        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        let fb = ReadFilterbank::from_bytes(&bytes).unwrap();
         assert_eq!(fb.get(0, 0, 0), 0f32);
         assert_eq!(fb.get(0, 0, 1), 1f32);
 
@@ -810,7 +722,7 @@ mod tests {
         let data: [u8; 8] = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
         bytes.extend_from_slice(&data);
         // Parse and build
-        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        let fb = ReadFilterbank::from_bytes(&bytes).unwrap();
         assert_eq!(fb.get(0, 0, 0), 0f32);
         assert_eq!(fb.get(0, 0, 1), 1f32);
 
@@ -849,7 +761,7 @@ mod tests {
         bytes.extend_from_slice(&6u16.to_ne_bytes());
         bytes.extend_from_slice(&7u16.to_ne_bytes());
         // Parse and build
-        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        let fb = ReadFilterbank::from_bytes(&bytes).unwrap();
         assert_eq!(fb.get(0, 0, 0), 0f32);
         assert_eq!(fb.get(0, 0, 1), 1f32);
 
@@ -888,7 +800,7 @@ mod tests {
         bytes.extend_from_slice(&0.6f32.to_ne_bytes());
         bytes.extend_from_slice(&0.7f32.to_ne_bytes());
         // Parse and build
-        let fb = Filterbank::from_bytes(&bytes).unwrap();
+        let fb = ReadFilterbank::from_bytes(&bytes).unwrap();
         assert_eq!(fb.get(0, 0, 0), 0.0f32);
         assert_eq!(fb.get(0, 0, 1), 0.1f32);
 
@@ -907,16 +819,16 @@ mod tests {
         // nsamp - 10, nbits - 8 , nifs - 1, nchans = 336,
         let file = File::open("tests/small.fil").unwrap();
         let bytes = unsafe { Mmap::map(&file).unwrap() };
-        let fb = Filterbank::from_bytes(&bytes[..]).unwrap();
-        let mut tm = [0f32; 10];
+        let fb = ReadFilterbank::from_bytes(&bytes[..]).unwrap();
+        let mut tm = vec![0f32; fb.nsamples()];
         (0..tm.len()).for_each(|j| {
-            for i in 0..336 {
-                tm[j] += fb.get(0, i, j) / 10f32;
+            for i in 0..fb.nchans() {
+                tm[j] += fb.get(0, j, i) / 10f32;
             }
         });
         assert_eq!(tm, [
-            4320.0005, 4321.2007, 4311.201, 4321.1006, 4375.0996, 4286.8994, 4285.102, 4318.8027,
-            4316.8994, 4329.8013,
+            4310.1016, 4280.099, 4295.5977, 4328.5996, 4326.4004, 4274.6997, 4338.1997, 4332.3013,
+            4384.0015, 4316.0996
         ]);
     }
 }

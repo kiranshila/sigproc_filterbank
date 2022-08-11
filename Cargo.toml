@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 nom = "7.1"
 thiserror = "1.0"
+ux = "0.1.5"
 
 [dev-dependencies]
 memmap2 = "0.5"

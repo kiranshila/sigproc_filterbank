@@ -1,3 +1,3 @@
 pub mod errors;
-pub mod parser;
-pub mod serialization;
+pub mod read;
+pub mod write;
