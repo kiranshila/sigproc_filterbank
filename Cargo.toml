@@ -2,8 +2,17 @@
 name = "sigproc_filterbank"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.57.0"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/kiranshila/sigproc_filterbank"
+description = "A parser and serializer for SIGPROC pulsar filterbank files"
+homepage = "https://github.com/kiranshila/sigproc_filterbank"
+readme = "README.md"
+keywords = ["astronomy", "parser", "pulsars"]
+categories = ["encoding","parser-implementations"]
+
 
 [dependencies]
 nom = "7.1"
 thiserror = "1.0"
-ux = "0.1.5"
+ux = "0.1"
