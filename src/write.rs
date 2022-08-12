@@ -298,6 +298,14 @@ where
         // Increment the number of samples
         self.nsamples += 1;
     }
+
+    /// Pack a single sample of spectrum into a vector of bytes, ready to be written to a file
+    pub fn pack(&self, spectrum: Spectra<'a, T>) -> Vec<u8>
+    where
+        Self: NumBits,
+    {
+        spectrum.pack()
+    }
 }
 
 #[cfg(test)]
