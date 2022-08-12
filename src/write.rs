@@ -70,6 +70,7 @@ macro_rules! string_header_bytes {
 type Spectra<'a, T> = &'a [T];
 
 pub trait PackSpectra {
+    /// Turn a slice of spectra data into it's filterbank byte-representation
     fn pack(&self) -> Vec<u8>;
 }
 
@@ -206,17 +207,26 @@ where
         }
     }
 
-    /// Dump the filterbank as vector of bytes that can be streamed or written to a file
+    /// Dump the whole filterbank as bytes
     pub fn bytes(&self) -> Vec<u8>
     where
         Self: NumBits,
     {
-        let mut bytes = self.to_header_bytes();
+        let mut bytes = self.header_bytes();
         bytes.extend_from_slice(&self.data);
         bytes
     }
 
-    fn to_header_bytes(&self) -> Vec<u8>
+    /// Dump the filterbank data as vector of bytes that can be streamed or written to a file
+    pub fn data_bytes(&self) -> Vec<u8>
+    where
+        Self: NumBits,
+    {
+        self.data.clone()
+    }
+
+    /// Returns just the header bytes from a filterbank, can be used to start a .fil file
+    pub fn header_bytes(&self) -> Vec<u8>
     where
         Self: NumBits,
     {
