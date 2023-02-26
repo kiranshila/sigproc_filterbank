@@ -247,14 +247,14 @@ where
         numeric_header_bytes!(foff, self, bytes);
         numeric_header_bytes!(ref_dm, self, bytes);
         numeric_header_bytes!(period, self, bytes);
-        numeric_header_bytes!(nbeams, self, bytes);
-        numeric_header_bytes!(ibeam, self, bytes);
         // Strings
         string_header_bytes!(raw_data_file, self, bytes);
         string_header_bytes!(source_name, self, bytes);
         // Things we need to cast
         cast_header_bytes!(barycentric, self, bytes, u32);
         cast_header_bytes!(pulsarcentric, self, bytes, u32);
+        cast_header_bytes!(nbeams, self, bytes, u32);
+        cast_header_bytes!(ibeam, self, bytes, u32);
         // Bits
         bytes.append(&mut sigproc_string("nbits"));
         bytes.extend_from_slice(&(self.nbits() as u32).to_ne_bytes());
