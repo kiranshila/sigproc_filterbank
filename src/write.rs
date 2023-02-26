@@ -17,7 +17,7 @@ pub struct WriteFilterbank<T> {
     pub telescope_id: Option<u32>,
     pub machine_id: Option<u32>,
     pub data_type: Option<u32>,
-    pub raw_data_file: Option<String>,
+    pub rawdatafile: Option<String>,
     pub source_name: Option<String>,
     pub barycentric: Option<bool>,
     pub pulsarcentric: Option<bool>,
@@ -184,7 +184,7 @@ where
             telescope_id: None,
             machine_id: None,
             data_type: None,
-            raw_data_file: None,
+            rawdatafile: None,
             source_name: None,
             barycentric: None,
             pulsarcentric: None,
@@ -248,7 +248,7 @@ where
         numeric_header_bytes!(ref_dm, self, bytes);
         numeric_header_bytes!(period, self, bytes);
         // Strings
-        string_header_bytes!(raw_data_file, self, bytes);
+        string_header_bytes!(rawdatafile, self, bytes);
         string_header_bytes!(source_name, self, bytes);
         // Things we need to cast
         cast_header_bytes!(barycentric, self, bytes, u32);
