@@ -7,15 +7,15 @@ pub enum FilterbankError {
     InvalidHeader,
     #[error("Incomplete header")]
     IncompleteHeader,
-    #[error("Extenal parser error")]
+    #[error("External parser error")]
     ExternalParseError(String),
     #[error("Unknown parser error")]
-    Unparseable,
+    Unparsable,
 }
 
 impl<I> ParseError<I> for FilterbankError {
     fn from_error_kind(_input: I, _kind: nom::error::ErrorKind) -> Self {
-        FilterbankError::Unparseable
+        FilterbankError::Unparsable
     }
 
     fn append(_: I, _: nom::error::ErrorKind, other: Self) -> Self {

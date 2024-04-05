@@ -28,6 +28,11 @@
         echo "Checking clippy..."
         cargo clippy --all-targets
 
+        echo "Checking spelling..."
+        codespell \
+          --skip target,.git \
+          --ignore-words-list crate
+
         echo "Testing Rust code..."
         cargo test
       '';
@@ -43,6 +48,7 @@
 
           # Linting support
           alejandra
+          codespell
         ]);
     in
       with pkgs; {
