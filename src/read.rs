@@ -524,6 +524,18 @@ mod tests {
     }
 
     #[test]
+    fn test_wrong_endian() {
+        let hstart = sigproc_string("HEADER_START");
+        let a = header_start(&hstart, Endianness::Big);
+        let b = header_start(&hstart, Endianness::Little);
+        if a.is_err() {
+            assert!(b.is_ok())
+        } else {
+            assert!(b.is_err())
+        }
+    }
+
+    #[test]
     fn test_numeric_headers() {
         let mut az = sigproc_string("az_start");
         az.extend_from_slice(&123.456f64.to_ne_bytes());
