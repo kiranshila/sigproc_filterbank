@@ -18,6 +18,16 @@ use crate::errors::FilterbankError;
 type ParseResult<'a, T> = IResult<&'a [u8], T, FilterbankError>;
 type HeaderResult<'a> = ParseResult<'a, HeaderParameter<'a>>;
 
+/// Figure out the endianness of the file by matching the length field of the `HEADER_START` at the start of the file
+fn determine_endianness(input: &[u8]) -> Result<Endianness, nom::Err<FilterbankError>> {
+    let test_bytes = &input[..4];
+    match test_bytes {
+        [12, 0, 0, 0] => Ok(Endianness::Little),
+        [0, 0, 0, 12] => Ok(Endianness::Big),
+        _ => Err(nom::Err::Failure(FilterbankError::InvalidHeader)),
+    }
+}
+
 fn header_string(s: &'static str, endian: Endianness) -> impl FnMut(&[u8]) -> ParseResult<&[u8]> {
     move |input: &[u8]| length_value(u32(endian), tag(s))(input)
 }
@@ -174,16 +184,10 @@ fn nbits(input: &[u8], endian: Endianness) -> HeaderResult {
 }
 
 fn header<'a>(input: &'a [u8]) -> ParseResult<'a, (Endianness, Vec<HeaderParameter<'a>>)> {
-    // Determine the endianness based on the first match of HEADER_START
-    let res_big = header_start(input, Endianness::Big);
-    let res_little = header_start(input, Endianness::Little);
-    let (remaining, endian) = if let Ok((remaining, _)) = res_big {
-        (remaining, Endianness::Big)
-    } else if let Ok((remaining, _)) = res_little {
-        (remaining, Endianness::Little)
-    } else {
-        return Err(res_little.err().unwrap());
-    };
+    // Determine the endianness
+    let endian = determine_endianness(input)?;
+    // Match the header
+    let (remaining, _) = header_start(input, endian)?;
     // The rest of the owl
     let (remaining, (headers, _)) = many_till(
         alt((
@@ -511,7 +515,7 @@ mod tests {
     use std::{fs::File, io::Read};
 
     use super::*;
-    use crate::write::sigproc_string;
+    use crate::write::{sigproc_string, sigproc_string_endian};
 
     #[test]
     fn test_start_end() {
@@ -524,8 +528,20 @@ mod tests {
     }
 
     #[test]
-    fn test_wrong_endian() {
-        let hstart = sigproc_string("HEADER_START");
+    fn test_wrong_endian_big() {
+        let hstart = sigproc_string_endian("HEADER_START", Endianness::Big);
+        let a = header_start(&hstart, Endianness::Big);
+        let b = header_start(&hstart, Endianness::Little);
+        if a.is_err() {
+            assert!(b.is_ok())
+        } else {
+            assert!(b.is_err())
+        }
+    }
+
+    #[test]
+    fn test_wrong_endian_little() {
+        let hstart = sigproc_string_endian("HEADER_START", Endianness::Little);
         let a = header_start(&hstart, Endianness::Big);
         let b = header_start(&hstart, Endianness::Little);
         if a.is_err() {

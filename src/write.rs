@@ -1,6 +1,21 @@
 use std::marker::PhantomData;
 
+use nom::number::Endianness;
 use ux::{u1, u2, u4};
+
+/// Create an endian-specific sigproc-compatible string
+#[allow(unused)]
+pub(crate) fn sigproc_string_endian(s: &str, endian: Endianness) -> Vec<u8> {
+    let len = s.len() as u32;
+    let mut out = vec![];
+    match endian {
+        Endianness::Big => out.extend_from_slice(&len.to_be_bytes()),
+        Endianness::Little => out.extend_from_slice(&len.to_le_bytes()),
+        Endianness::Native => out.extend_from_slice(&len.to_ne_bytes()),
+    }
+    out.extend_from_slice(s.as_bytes());
+    out
+}
 
 /// Creates a sigproc-compatible string
 pub(crate) fn sigproc_string(s: &str) -> Vec<u8> {
@@ -313,11 +328,21 @@ mod tests {
     use super::*;
     use crate::read::ReadFilterbank;
 
+    // Tested seperately because we don't know the endianness of the test platform
+
     #[test]
-    fn test_sigproc_string() {
+    fn test_sigproc_string_little() {
         assert_eq!(
             b"\x0C\x00\x00\x00HEADER_START".to_vec(),
-            sigproc_string("HEADER_START")
+            sigproc_string_endian("HEADER_START", Endianness::Little)
+        );
+    }
+
+    #[test]
+    fn test_sigproc_string_big() {
+        assert_eq!(
+            b"\x00\x00\x00\x0CHEADER_START".to_vec(),
+            sigproc_string_endian("HEADER_START", Endianness::Big)
         );
     }
 
